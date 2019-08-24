@@ -787,6 +787,8 @@ final class PhotoLibraryService {
 
         assetsLibrary.asset(for: url, resultBlock: { (asset: ALAsset?) in
 
+            sleep(1)
+
             guard let asset = asset else {
                 completion("Retrieved asset is nil")
                 return
