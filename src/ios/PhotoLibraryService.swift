@@ -785,9 +785,9 @@ final class PhotoLibraryService {
 
     fileprivate func putMediaToAlbum(_ assetsLibrary: ALAssetsLibrary, url: URL, album: String, completion: @escaping (_ error: String?)->Void) {
 
-        assetsLibrary.asset(for: url, resultBlock: { (asset: ALAsset?) in
+        sleep(1)
 
-            sleep(1)
+        assetsLibrary.asset(for: url, resultBlock: { (asset: ALAsset?) in
 
             guard let asset = asset else {
                 completion("Retrieved asset is nil")
