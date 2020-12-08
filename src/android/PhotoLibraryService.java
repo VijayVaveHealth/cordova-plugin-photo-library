@@ -201,7 +201,6 @@ public class PhotoLibraryService {
     saveMedia(context, cordova, url, album, imageMimeToExtension, new FilePathRunnable() {
       @Override
       public void run(String filePath) {
-        try {
           JSONObject payload = new JSONObject();
           completion.run(payload);
       }
