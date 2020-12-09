@@ -103,8 +103,20 @@ final class PhotoLibraryService {
     }
 
     static func hasPermission() -> Bool {
-        return PHPhotoLibrary.authorizationStatus() == .authorized
-
+        if #available(iOS 14, *) {
+            let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+            if status == .authorized {
+                return true;
+            }
+            if status == .limited {
+                return true;
+            }
+            return false;
+        } else {
+            // Fallback on earlier versions
+            return PHPhotoLibrary.authorizationStatus() == .authorized
+        }
+        return false
     }
     
     func getPhotosFromAlbum(_ albumTitle: String) -> [NSDictionary] {
@@ -562,103 +574,96 @@ final class PhotoLibraryService {
     }
 
     func requestAuthorization(_ success: @escaping () -> Void, failure: @escaping (_ err: String) -> Void ) {
-
-        let status = PHPhotoLibrary.authorizationStatus()
-
-        if status == .authorized {
-            success()
-            return
-        }
-
-        if status == .notDetermined {
-            // Ask for permission
-            PHPhotoLibrary.requestAuthorization() { (status) -> Void in
-                switch status {
+        if #available(iOS 14, *) {
+            let requiredAccessLevel: PHAccessLevel = .addOnly
+            PHPhotoLibrary.requestAuthorization(for: requiredAccessLevel) { authorizationStatus in
+                switch authorizationStatus {
+                case .limited:
+                    print("limited authorization granted")
+                    success()
+                    return
                 case .authorized:
                     success()
+                    return
+                case .notDetermined:
+                    PHPhotoLibrary.requestAuthorization(for: requiredAccessLevel) { (status) -> Void in
+                        switch status {
+                        case .authorized:
+                            success()
+                        default:
+                            failure("requestAuthorization denied by user")
+                        }
+                    }
+                    return
                 default:
-                    failure("requestAuthorization denied by user")
+                    failure("Permission Denial")
                 }
             }
-            return
-        }
-
-        // Permission was manually denied by user, open settings screen
-        let settingsUrl = URL(string: UIApplication.openSettingsURLString)
-        if let url = settingsUrl {
-            UIApplication.shared.openURL(url)
-            // TODO: run callback only when return ?
-            // Do not call success, as the app will be restarted when user changes permission
         } else {
-            failure("could not open settings url")
+            
+            let status = PHPhotoLibrary.authorizationStatus()
+            if status == .authorized {
+                success()
+                return
+            }
+
+            if status == .notDetermined {
+                // Ask for permission
+                PHPhotoLibrary.requestAuthorization() { (status) -> Void in
+                    switch status {
+                    case .authorized:
+                        success()
+                    default:
+                        failure("requestAuthorization denied by user")
+                    }
+                }
+                return
+            }
+
+            // Permission was manually denied by user, open settings screen
+            let settingsUrl = URL(string: UIApplication.openSettingsURLString)
+            if let url = settingsUrl {
+                UIApplication.shared.openURL(url)
+                // TODO: run callback only when return ?
+                // Do not call success, as the app will be restarted when user changes permission
+            } else {
+                failure("could not open settings url")
+            }
         }
 
     }
 
-    // TODO: implement with PHPhotoLibrary (UIImageWriteToSavedPhotosAlbum) instead of deprecated ALAssetsLibrary,
-    // as described here: http://stackoverflow.com/questions/11972185/ios-save-photo-in-an-app-specific-album
-    // but first find a way to save animated gif with it.
-    // TODO: should return library item
     func saveImage(_ url: String, album: String, completion: @escaping (_ libraryItem: NSDictionary?, _ error: String?)->Void) {
 
         let sourceData: Data
         do {
             sourceData = try getDataFromURL(url)
         } catch {
-            completion(nil, "\(error)")
+            completion(nil, "\(String(describing: error))")
             return
         }
 
-        let assetsLibrary = ALAssetsLibrary()
+        func saveImage() {
 
-        func saveImage(_ photoAlbum: PHAssetCollection) {
-            assetsLibrary.writeImageData(toSavedPhotosAlbum: sourceData, metadata: nil) { (assetUrl: URL?, error: Error?) in
+            let imageUrl: URL? = URL(string:url)
+            var assetId: String = ""
 
-                if error != nil {
-                    completion(nil, "Could not write image to album: \(error)")
-                    return
+            PHPhotoLibrary.shared().performChanges({
+                let assetRequest = PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: imageUrl!)!
+                let placeHolder = assetRequest.placeholderForCreatedAsset
+                assetId = placeHolder!.localIdentifier
+            }) { (isSuccess, error) in
+                if isSuccess {
+                    let myDict:NSDictionary = ["Data" : assetId]
+                    completion(myDict, nil)
+                } else {
+                    completion(nil, "Could not write image to album: \(String(describing: error))")
                 }
-
-                guard let assetUrl = assetUrl else {
-                    completion(nil, "Writing image to album resulted empty asset")
-                    return
-                }
-
-                self.putMediaToAlbum(assetsLibrary, url: assetUrl, album: album, completion: { (error) in
-                    if error != nil {
-                        completion(nil, error)
-                    } else {
-                        let fetchResult = PHAsset.fetchAssets(withALAssetURLs: [assetUrl], options: nil)
-                        var libraryItem: NSDictionary? = nil
-                        if fetchResult.count == 1 {
-                            let asset = fetchResult.firstObject
-                            if let asset = asset {
-                                libraryItem = self.assetToLibraryItem(asset: asset, useOriginalFileNames: false, includeAlbumData: true)
-                            }
-                        }
-                        completion(libraryItem, nil)
-                    }
-                })
-
             }
         }
 
-        if let photoAlbum = PhotoLibraryService.getPhotoAlbum(album) {
-            saveImage(photoAlbum)
-            return
-        }
-        else{
-            PhotoLibraryService.createPhotoAlbum(album) { (photoAlbum: PHAssetCollection?, error: String?) in
-                
-                guard let photoAlbum = photoAlbum else {
-                    completion(nil, error)
-                    return
-                }
-                
-                saveImage(photoAlbum)
-                
-            }
-        }
+        saveImage()
+        return
 
     }
 
@@ -669,73 +674,26 @@ final class PhotoLibraryService {
             return
         }
 
-        let assetsLibrary = ALAssetsLibrary()
+        func saveVideo() {
 
-        func saveVideo(_ photoAlbum: PHAssetCollection) {
+                 var assetId: String = ""
+                 PHPhotoLibrary.shared().performChanges({
+                     let assetRequest = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: videoURL)!
+                     let placeHolder = assetRequest.placeholderForCreatedAsset
+                     assetId = placeHolder!.localIdentifier
+                 }) { (isSuccess, error) in
+                     if isSuccess {
+                        let myDict:NSDictionary = ["Data" : assetId]
+                        completion(myDict, nil)
+                     } else {
+                         completion(nil, "Could not write video to album: \(String(describing: error))")
+                     }
+                 }
 
-            // TODO: new way, seems not supports dataURL
-            //            if !UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(videoURL.relativePath!) {
-            //                completion(url: nil, error: "Provided video is not compatible with Saved Photo album")
-            //                return
-            //            }
-            //            UISaveVideoAtPathToSavedPhotosAlbum(videoURL.relativePath!, nil, nil, nil)
-
-            if !assetsLibrary.videoAtPathIs(compatibleWithSavedPhotosAlbum: videoURL) {
-
-                // TODO: try to convert to MP4 as described here?: http://stackoverflow.com/a/39329155/1691132
-
-                completion(nil, "Provided video is not compatible with Saved Photo album")
-                return
-            }
-
-            assetsLibrary.writeVideoAtPath(toSavedPhotosAlbum: videoURL) { (assetUrl: URL?, error: Error?) in
-
-                if error != nil {
-                    completion(nil, "Could not write video to album: \(error)")
-                    return
-                }
-
-                guard let assetUrl = assetUrl else {
-                    completion(nil, "Writing video to album resulted empty asset")
-                    return
-                }
-
-                self.putMediaToAlbum(assetsLibrary, url: assetUrl, album: album, completion: { (error) in
-  
-                    
-                    if error != nil {
-                        completion(nil, error)
-                    } else {
-                        let fetchResult = PHAsset.fetchAssets(withALAssetURLs: [assetUrl], options: nil)
-                        var libraryItem: NSDictionary? = nil
-                        if fetchResult.count == 1 {
-                            let asset = fetchResult.firstObject
-                            if let asset = asset {
-                                libraryItem = self.assetToLibraryItem(asset: asset, useOriginalFileNames: false, includeAlbumData: true)
-                            }
-                        }
-                        completion(libraryItem, nil)
-                    }
-                })
-            }
-
-        }
-
-        if let photoAlbum = PhotoLibraryService.getPhotoAlbum(album) {
-            saveVideo(photoAlbum)
-            return
-        }
-
-        PhotoLibraryService.createPhotoAlbum(album) { (photoAlbum: PHAssetCollection?, error: String?) in
-
-            guard let photoAlbum = photoAlbum else {
-                completion(nil, error)
-                return
-            }
-
-            saveVideo(photoAlbum)
-
-        }
+             }
+        
+        saveVideo()
+        return
 
     }
 
